@@ -251,7 +251,6 @@ JAVA_STATS_PASSWORD=your_password
 - Java Stats credentials in `.env` (optional, defaults provided)
 - ClickHouse credentials hardcoded in `memory_adapter.py`:
   - URL: `http://ec2-47-129-241-41.ap-southeast-1.compute.amazonaws.com:8123`
-  - Auth: `("wm_test", "Watermelon@123")`
 - Never commit credential changes
 - Consider migrating all hardcoded credentials to .env
 

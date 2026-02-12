@@ -1,12 +1,14 @@
 """
 Service Behavior Memory Adapter
 Fetches Service's behavioral patterns from ClickHouse for specific application and service within time range
+Includes intent-based routing for pattern-specific queries
 """
 
 import json
 import requests
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Set
 from datetime import datetime
+from .intent_based_queries import dispatch_intent_query
 
 
 # -------------------------------------------------------------------
@@ -240,6 +242,97 @@ def transform_behavior_memory(
         "stats": stats,
         "patterns": patterns
     }
+
+
+# -------------------------------------------------------------------
+# Orchestrator-facing function with intent routing
+# -------------------------------------------------------------------
+
+def fetch_patterns_by_intent(
+    intents: Set[str],
+    start_time: int,
+    end_time: int,
+    app_id: int,
+    service_id: Optional[int] = None,
+    service_name: Optional[str] = None,
+    incident_timestamp: Optional[int] = None
+) -> Dict[str, Any]:
+    """
+    Orchestrator-facing function that routes to appropriate intent-based queries
+
+    This function analyzes the intents and calls the appropriate pattern query functions
+
+    Args:
+        intents: Set of intent names (primary, secondary, enriched combined)
+        start_time: Start time in Unix milliseconds
+        end_time: End time in Unix milliseconds
+        app_id: Application ID
+        service_id: Optional service ID (resolved from service name)
+        service_name: Optional service name (raw from intent classifier)
+        incident_timestamp: Optional incident timestamp for RECURRING_INCIDENT
+
+    Returns:
+        Dictionary with results from all applicable intent queries
+    """
+    # Pattern-related intents that require specialized queries
+    PATTERN_INTENTS = {
+        "UNDERCURRENTS_TREND",
+        "CAPACITY_RISK",
+        "SEASONALITY_PATTERN",
+        "TIME_WINDOW_ANOMALY",
+        "RECURRING_INCIDENT",
+        "HISTORICAL_COMPARISON",
+        "RISK_PREDICTION"
+    }
+
+    # Find which pattern intents are present
+    intents_to_query = set(intents).intersection(PATTERN_INTENTS)
+
+    if not intents_to_query:
+        # No pattern intents, use general fetch
+        print("   No pattern-specific intents detected, using general query")
+        rows = fetch_behavior_service_memory(start_time, end_time, app_id, service_name)
+        return transform_behavior_memory(rows, start_time, end_time, app_id, service_name)
+
+    # Execute intent-specific queries
+    print(f"   Pattern intents detected: {', '.join(intents_to_query)}")
+
+    results = {
+        "intents_queried": list(intents_to_query),
+        "intent_results": {}
+    }
+
+    for intent in intents_to_query:
+        print(f"   → Querying {intent}...")
+
+        try:
+            result = dispatch_intent_query(
+                intent=intent,
+                start_time=start_time,
+                end_time=end_time,
+                app_id=app_id,
+                service_id=service_id,
+                service_name=service_name,
+                incident_timestamp=incident_timestamp
+            )
+
+            results["intent_results"][intent] = result
+
+            # Print summary
+            if result.get('status') == 'under_progress':
+                print(f"      {result.get('message')}")
+            else:
+                record_count = result.get('total_records', 0)
+                print(f"      Found {record_count} records")
+
+        except Exception as e:
+            print(f"      Error querying {intent}: {e}")
+            results["intent_results"][intent] = {
+                "error": str(e),
+                "intent": intent
+            }
+
+    return results
 
 
 # -------------------------------------------------------------------

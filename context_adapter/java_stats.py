@@ -142,6 +142,7 @@ def transform_eb_service(eb_record: Dict) -> Dict[str, Any]:
         Formatted EB service dictionary
     """
     return {
+        "service_id": eb_record.get("transactionId"),
         "service": eb_record.get("transactionName", ""),
         "health": eb_record.get("ebHealth", "HEALTHY"),
         "success": {
@@ -176,6 +177,7 @@ def transform_response_service(response_record: Dict) -> Dict[str, Any]:
         Formatted RESPONSE service dictionary
     """
     return {
+        "service_id": response_record.get("transactionId"),
         "service": response_record.get("transactionName", ""),
         "health": response_record.get("responseHealth", "HEALTHY"),
         "success": {
@@ -278,6 +280,250 @@ def transform_to_llm_format(raw_data: List[Dict], start_time_ms: str, end_time_m
     }
 
 
+def get_current_health(
+    app_id: int,
+    start_time: str,
+    end_time: str,
+    index: str,
+    username: str,
+    password: str
+) -> Optional[Dict[str, Any]]:
+    """
+    CURRENT_HEALTH intent handler.
+    Get health status for all services in the application within time range.
+
+    Args:
+        app_id: Application ID
+        start_time: Start time in Unix milliseconds (string)
+        end_time: End time in Unix milliseconds (string)
+        index: Time granularity (HOURLY, DAILY, WEEKLY, MONTHLY)
+        username: Keycloak username
+        password: Keycloak password
+
+    Returns:
+        Dictionary with 4 arrays (unhealthy_services_eb, at_risk_services_eb,
+        unhealthy_services_response, at_risk_services_response) for all services
+        within the time range, or None if failed
+    """
+    print(f"📊 CURRENT_HEALTH: Fetching application-wide health (app_id={app_id})")
+
+    # Fetch raw data from API
+    raw_data = fetch_api_data(
+        start_time_ms=start_time,
+        end_time_ms=end_time,
+        username=username,
+        password=password,
+        application_id=app_id,
+        index=index
+    )
+
+    if not raw_data:
+        print("✗ Failed to fetch data for CURRENT_HEALTH")
+        return None
+
+    # Transform to LLM format (returns all services)
+    result = transform_to_llm_format(raw_data, start_time, end_time)
+    print(f"✓ CURRENT_HEALTH: Returned {result['stats']['total_slos']} services")
+
+    return result
+
+
+def get_service_health(
+    app_id: int,
+    start_time: str,
+    end_time: str,
+    service_id: Optional[int],
+    index: str,
+    username: str,
+    password: str
+) -> Optional[Dict[str, Any]]:
+    """
+    SERVICE_HEALTH intent handler.
+    Get health status for a specific service within time range.
+
+    Args:
+        app_id: Application ID
+        start_time: Start time in Unix milliseconds (string)
+        end_time: End time in Unix milliseconds (string)
+        service_id: Service ID (required - function returns None if not provided)
+        index: Time granularity (HOURLY, DAILY, WEEKLY, MONTHLY)
+        username: Keycloak username
+        password: Keycloak password
+
+    Returns:
+        Dictionary with health data filtered for the specific service,
+        or None if service_id not provided or fetch failed
+    """
+    # Check if service_id is provided
+    if service_id is None:
+        print("⚠️  SERVICE_HEALTH: service_id not provided, skipping")
+        return None
+
+    print(f"📊 SERVICE_HEALTH: Fetching health for service_id={service_id}")
+
+    # Fetch raw data from API
+    raw_data = fetch_api_data(
+        start_time_ms=start_time,
+        end_time_ms=end_time,
+        username=username,
+        password=password,
+        application_id=app_id,
+        index=index
+    )
+
+    if not raw_data:
+        print("✗ Failed to fetch data for SERVICE_HEALTH")
+        return None
+
+    # Filter raw_data to only include records matching service_id
+    filtered_data = [record for record in raw_data if record.get("transactionId") == service_id]
+
+    if not filtered_data:
+        print(f"⚠️  SERVICE_HEALTH: No data found for service_id={service_id}")
+        return {
+            "application": raw_data[0].get("applicationName", "WMPlatform") if raw_data else "WMPlatform",
+            "service_id": service_id,
+            "window": {
+                "start": datetime.fromtimestamp(int(start_time) / 1000).strftime("%Y-%m-%d"),
+                "end": datetime.fromtimestamp(int(end_time) / 1000).strftime("%Y-%m-%d"),
+                "granularity": index
+            },
+            "stats": {
+                "total_slos": 0,
+                "unhealthy_slo": 0,
+                "at_risk_slo": 0,
+                "healthy_slo": 0
+            },
+            "unhealthy_services_eb": [],
+            "at_risk_services_eb": [],
+            "unhealthy_services_response": [],
+            "at_risk_services_response": []
+        }
+
+    # Transform filtered data
+    result = transform_to_llm_format(filtered_data, start_time, end_time)
+    result["service_id"] = service_id
+    print(f"✓ SERVICE_HEALTH: Returned {len(filtered_data)} records for service_id={service_id}")
+
+    return result
+
+
+def get_error_budget_status(
+    app_id: int,
+    start_time: str,
+    end_time: str,
+    index: str,
+    username: str,
+    password: str,
+    service_id: Optional[int] = None
+) -> Optional[Dict[str, Any]]:
+    """
+    ERROR_BUDGET_STATUS intent handler.
+    Get error budget information (EB category only) for application or specific service.
+
+    Args:
+        app_id: Application ID
+        start_time: Start time in Unix milliseconds (string)
+        end_time: End time in Unix milliseconds (string)
+        index: Time granularity (HOURLY, DAILY, WEEKLY, MONTHLY)
+        username: Keycloak username
+        password: Keycloak password
+        service_id: Optional service ID to filter by specific service
+
+    Returns:
+        Dictionary with error budget data (EB category only),
+        or None if fetch failed
+    """
+    if service_id:
+        print(f"📊 ERROR_BUDGET_STATUS: Fetching EB for service_id={service_id}")
+    else:
+        print(f"📊 ERROR_BUDGET_STATUS: Fetching EB for all services (app_id={app_id})")
+
+    # Fetch raw data from API
+    raw_data = fetch_api_data(
+        start_time_ms=start_time,
+        end_time_ms=end_time,
+        username=username,
+        password=password,
+        application_id=app_id,
+        index=index
+    )
+
+    if not raw_data:
+        print("✗ Failed to fetch data for ERROR_BUDGET_STATUS")
+        return None
+
+    # Filter by service_id if provided
+    if service_id:
+        raw_data = [record for record in raw_data if record.get("transactionId") == service_id]
+        if not raw_data:
+            print(f"⚠️  ERROR_BUDGET_STATUS: No data found for service_id={service_id}")
+            return None
+
+    # Filter to only EB category records
+    eb_records = [record for record in raw_data if record.get("dataCategory") == "EB"]
+
+    if not eb_records:
+        print("⚠️  ERROR_BUDGET_STATUS: No EB records found")
+        return {
+            "application": raw_data[0].get("applicationName", "WMPlatform") if raw_data else "WMPlatform",
+            "service_id": service_id,
+            "window": {
+                "start": datetime.fromtimestamp(int(start_time) / 1000).strftime("%Y-%m-%d"),
+                "end": datetime.fromtimestamp(int(end_time) / 1000).strftime("%Y-%m-%d"),
+                "granularity": index
+            },
+            "stats": {
+                "total_eb_slos": 0,
+                "eb_unhealthy": 0,
+                "eb_at_risk": 0,
+                "eb_healthy": 0
+            },
+            "unhealthy_services_eb": [],
+            "at_risk_services_eb": [],
+            "healthy_services_eb": []
+        }
+
+    # Transform EB services
+    eb_services = [transform_eb_service(record) for record in eb_records]
+
+    # Categorize by health status
+    eb_unhealthy = [s for s in eb_services if s["health"] == "UNHEALTHY"]
+    eb_at_risk = [s for s in eb_services if s["health"] == "AT_RISK"]
+    eb_healthy = [s for s in eb_services if s["health"] == "HEALTHY"]
+
+    # Sort by volume
+    eb_unhealthy.sort(key=lambda x: x["volume"]["total_requests"], reverse=True)
+    eb_at_risk.sort(key=lambda x: x["volume"]["total_requests"], reverse=True)
+    eb_healthy.sort(key=lambda x: x["volume"]["total_requests"], reverse=True)
+
+    # Build result
+    result = {
+        "application": eb_records[0].get("applicationName", "WMPlatform"),
+        "window": {
+            "start": datetime.fromtimestamp(int(start_time) / 1000).strftime("%Y-%m-%d"),
+            "end": datetime.fromtimestamp(int(end_time) / 1000).strftime("%Y-%m-%d"),
+            "granularity": index
+        },
+        "stats": {
+            "total_eb_slos": len(eb_services),
+            "eb_unhealthy": len(eb_unhealthy),
+            "eb_at_risk": len(eb_at_risk),
+            "eb_healthy": len(eb_healthy)
+        },
+        "unhealthy_services_eb": eb_unhealthy,
+        "at_risk_services_eb": eb_at_risk,
+        "healthy_services_eb": eb_healthy
+    }
+
+    if service_id:
+        result["service_id"] = service_id
+
+    print(f"✓ ERROR_BUDGET_STATUS: Returned {len(eb_services)} EB services")
+
+    return result
+
+
 if __name__ == "__main__":
     print("Fetching and Transforming API Data to LLM Format")
     print("=" * 50)
@@ -334,3 +580,76 @@ if __name__ == "__main__":
     print(f"  At Risk Services (EB): {len(llm_format['at_risk_services_eb'])}")
     print(f"  Unhealthy Services (RESPONSE): {len(llm_format['unhealthy_services_response'])}")
     print(f"  At Risk Services (RESPONSE): {len(llm_format['at_risk_services_response'])}")
+
+    print("\n\n--- Testing Intent-Based Functions ---")
+
+    # Test CURRENT_HEALTH
+    print("\n1. Testing CURRENT_HEALTH:")
+    current_health = get_current_health(
+        app_id=application_id,
+        start_time=start_time,
+        end_time=end_time,
+        index=index,
+        username=username,
+        password=password
+    )
+    if current_health:
+        print(f"   Total services: {current_health['stats']['total_slos']}")
+
+    # Test SERVICE_HEALTH (with a service_id from the data)
+    print("\n2. Testing SERVICE_HEALTH:")
+    if raw_data and len(raw_data) > 0:
+        test_service_id = raw_data[0].get("transactionId")
+        service_health = get_service_health(
+            app_id=application_id,
+            start_time=start_time,
+            end_time=end_time,
+            service_id=test_service_id,
+            index=index,
+            username=username,
+            password=password
+        )
+        if service_health:
+            print(f"   Service {test_service_id}: {service_health['stats']['total_slos']} records")
+
+    # Test SERVICE_HEALTH without service_id
+    print("\n3. Testing SERVICE_HEALTH without service_id:")
+    service_health_none = get_service_health(
+        app_id=application_id,
+        start_time=start_time,
+        end_time=end_time,
+        service_id=None,
+        index=index,
+        username=username,
+        password=password
+    )
+    print(f"   Result: {service_health_none}")
+
+    # Test ERROR_BUDGET_STATUS
+    print("\n4. Testing ERROR_BUDGET_STATUS (all services):")
+    eb_status = get_error_budget_status(
+        app_id=application_id,
+        start_time=start_time,
+        end_time=end_time,
+        index=index,
+        username=username,
+        password=password
+    )
+    if eb_status:
+        print(f"   Total EB services: {eb_status['stats']['total_eb_slos']}")
+
+    # Test ERROR_BUDGET_STATUS with service_id
+    print("\n5. Testing ERROR_BUDGET_STATUS (specific service):")
+    if raw_data and len(raw_data) > 0:
+        test_service_id = raw_data[0].get("transactionId")
+        eb_status_service = get_error_budget_status(
+            app_id=application_id,
+            start_time=start_time,
+            end_time=end_time,
+            index=index,
+            username=username,
+            password=password,
+            service_id=test_service_id
+        )
+        if eb_status_service:
+            print(f"   Service {test_service_id} EB: {eb_status_service['stats']['total_eb_slos']} records")

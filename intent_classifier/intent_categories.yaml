@@ -20,6 +20,16 @@ STATE:
       data_sources:
         - java_stats_api
 
+    ERROR_BUDGET_STATUS:
+      description: "Error budget consumption and status"
+      examples:
+        - "What's the error budget status?"
+        - "Show me error budget for all services"
+        - "Error budget consumption?"
+        - "How much error budget is left?"
+      data_sources:
+        - java_stats_api
+
     SLO_STATUS:
       description: "SLO breach and compliance status"
       examples:

@@ -16,8 +16,15 @@ sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'intent
 sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'context_adapter'))
 
 from intent_classifier.intent_classifier import IntentClassifier
-from context_adapter.java_stats import fetch_api_data, transform_to_llm_format
-from context_adapter.memory_adapter import fetch_behavior_service_memory, transform_behavior_memory
+from context_adapter.java_stats import (
+    fetch_api_data,
+    transform_to_llm_format,
+    get_current_health,
+    get_service_health,
+    get_error_budget_status
+)
+from context_adapter.memory_adapter import fetch_behavior_service_memory, transform_behavior_memory, fetch_patterns_by_intent
+from utils.service_matcher import ServiceMatcher
 
 
 class SLOOrchestrator:
@@ -35,7 +42,16 @@ class SLOOrchestrator:
         # Initialize intent classifier
         print("Initializing Intent Classifier...")
         self.classifier = IntentClassifier()
-        print("✅ Intent Classifier ready\n")
+        print("✅ Intent Classifier ready")
+
+        # Initialize service matcher
+        print("Initializing Service Matcher...")
+        try:
+            self.service_matcher = ServiceMatcher("services.yaml")
+            print(f"✅ Service Matcher ready ({len(self.service_matcher.services_by_id)} services loaded)\n")
+        except FileNotFoundError:
+            print("⚠️  services.yaml not found - service matching disabled\n")
+            self.service_matcher = None
 
         # Configuration - can be moved to .env or config file
         self.app_id = 31854  # Default application ID
@@ -81,6 +97,13 @@ class SLOOrchestrator:
         data_sources = classification_result.get('data_sources', [])
         timestamp_resolution = classification_result.get('timestamp_resolution', {})
 
+        # Collect all intents (primary + secondary + enriched) for pattern routing
+        all_intents = set()
+        all_intents.add(classification_result.get('primary_intent'))
+        all_intents.update(classification_result.get('secondary_intents', []))
+        all_intents.update(classification_result.get('enriched_intents', []))
+        all_intents.discard(None)  # Remove None if present
+
         if not timestamp_resolution:
             return {
                 "success": False,
@@ -101,13 +124,28 @@ class SLOOrchestrator:
         # Step 3: Fetch data from adapters
         adapter_data = {}
 
+        # Resolve service_id if service mentioned
+        service_id = None
+        if service and self.service_matcher:
+            print(f"   Resolving service name: '{service}'")
+            matches = self.service_matcher.find_matches(service, threshold=0.3, max_results=1)
+            if matches:
+                service_id = matches[0]['service_id']
+                matched_path = matches[0]['service_path']
+                score = matches[0]['similarity_score']
+                print(f"   ✓ Matched to service_id={service_id} ({matched_path}, score={score:.3f})\n")
+            else:
+                print(f"   ⚠️  No service match found for '{service}'\n")
+
         # Fetch from Java Stats API
         if 'java_stats_api' in data_sources:
             print("   → Fetching from Java Stats API...")
             java_data = self._fetch_java_stats(
                 start_time_ms=str(start_time),
                 end_time_ms=str(end_time),
-                index=index
+                index=index,
+                intents=all_intents,
+                service_id=service_id
             )
             if java_data:
                 adapter_data['java_stats_api'] = java_data
@@ -121,7 +159,9 @@ class SLOOrchestrator:
             memory_data = self._fetch_memory_adapter(
                 start_time=start_time,
                 end_time=end_time,
-                service_name=service
+                service_name=service,
+                intents=all_intents,
+                incident_timestamp=None  # Could extract from entities if needed
             )
             if memory_data:
                 adapter_data['clickhouse'] = memory_data
@@ -175,21 +215,70 @@ class SLOOrchestrator:
         self,
         start_time_ms: str,
         end_time_ms: str,
-        index: str
+        index: str,
+        intents: Optional[set] = None,
+        service_id: Optional[int] = None
     ) -> Optional[Dict[str, Any]]:
         """
-        Fetch data from Java Stats API (Watermelon API)
+        Fetch data from Java Stats API (Watermelon API) with intent-based routing.
+
+        Routes to specific functions based on intent:
+        - CURRENT_HEALTH: Application-wide health across all services
+        - SERVICE_HEALTH: Health for a specific service (requires service_id)
+        - ERROR_BUDGET_STATUS: Error budget data (EB category only)
 
         Args:
             start_time_ms: Start time in milliseconds (string)
             end_time_ms: End time in milliseconds (string)
             index: Time granularity (HOURLY, DAILY, etc.)
+            intents: Set of all intents (primary + secondary + enriched)
+            service_id: Optional service ID for service-specific queries
 
         Returns:
             Transformed LLM-ready data or None if failed
         """
         try:
-            # Fetch raw data
+            # Intent-based routing
+            if intents:
+                # Priority order: SERVICE_HEALTH > ERROR_BUDGET_STATUS > CURRENT_HEALTH
+
+                # SERVICE_HEALTH - requires service_id
+                if "SERVICE_HEALTH" in intents:
+                    return get_service_health(
+                        app_id=self.app_id,
+                        start_time=start_time_ms,
+                        end_time=end_time_ms,
+                        service_id=service_id,
+                        index=index,
+                        username=self.java_stats_username,
+                        password=self.java_stats_password
+                    )
+
+                # ERROR_BUDGET_STATUS - can work with or without service_id
+                elif "ERROR_BUDGET_STATUS" in intents:
+                    return get_error_budget_status(
+                        app_id=self.app_id,
+                        start_time=start_time_ms,
+                        end_time=end_time_ms,
+                        index=index,
+                        username=self.java_stats_username,
+                        password=self.java_stats_password,
+                        service_id=service_id
+                    )
+
+                # CURRENT_HEALTH - application-wide
+                elif "CURRENT_HEALTH" in intents:
+                    return get_current_health(
+                        app_id=self.app_id,
+                        start_time=start_time_ms,
+                        end_time=end_time_ms,
+                        index=index,
+                        username=self.java_stats_username,
+                        password=self.java_stats_password
+                    )
+
+            # Fallback: Use general fetch_api_data + transform (backward compatibility)
+            print("   Using general java_stats fetch (no specific intent matched)")
             raw_data = fetch_api_data(
                 start_time_ms=start_time_ms,
                 end_time_ms=end_time_ms,
@@ -214,40 +303,69 @@ class SLOOrchestrator:
         self,
         start_time: int,
         end_time: int,
-        service_name: Optional[str] = None
+        service_name: Optional[str] = None,
+        intents: Optional[set] = None,
+        incident_timestamp: Optional[int] = None
     ) -> Optional[Dict[str, Any]]:
         """
-        Fetch data from ClickHouse memory adapter
+        Fetch data from ClickHouse memory adapter with intent-based routing
 
         Args:
             start_time: Start time in milliseconds
             end_time: End time in milliseconds
-            service_name: Optional service name filter
+            service_name: Optional service name filter (from intent classifier)
+            intents: Set of all intents (primary + secondary + enriched)
+            incident_timestamp: Optional incident timestamp for RECURRING_INCIDENT
 
         Returns:
-            Transformed LLM-ready data or None if failed
+            Intent-based pattern data or None if failed
         """
         try:
-            # Fetch raw data
-            raw_data = fetch_behavior_service_memory(
-                start_time=start_time,
-                end_time=end_time,
-                app_id=self.app_id,
-                sid=service_name
-            )
+            # Step 1: Resolve service name to service_id
+            service_id = None
+            if service_name and self.service_matcher:
+                print(f"   Resolving service name: '{service_name}'")
+                matches = self.service_matcher.find_matches(service_name, threshold=0.3, max_results=1)
+                if matches:
+                    service_id = matches[0]['service_id']
+                    matched_path = matches[0]['service_path']
+                    score = matches[0]['similarity_score']
+                    print(f"   ✓ Matched to service_id={service_id} ({matched_path}, score={score:.3f})")
+                else:
+                    print(f"   ⚠️  No service match found for '{service_name}'")
 
-            if not raw_data:
-                return None
+            # Step 2: Use intent-based routing if intents provided
+            if intents:
+                result = fetch_patterns_by_intent(
+                    intents=intents,
+                    start_time=start_time,
+                    end_time=end_time,
+                    app_id=self.app_id,
+                    service_id=service_id,
+                    service_name=service_name,
+                    incident_timestamp=incident_timestamp
+                )
+                return result
+            else:
+                # Fallback to general fetch (backward compatibility)
+                raw_data = fetch_behavior_service_memory(
+                    start_time=start_time,
+                    end_time=end_time,
+                    app_id=self.app_id,
+                    sid=service_name
+                )
 
-            # Transform to LLM format
-            transformed = transform_behavior_memory(
-                rows=raw_data,
-                start_time=start_time,
-                end_time=end_time,
-                app_id=self.app_id,
-                sid=service_name
-            )
-            return transformed
+                if not raw_data:
+                    return None
+
+                transformed = transform_behavior_memory(
+                    rows=raw_data,
+                    start_time=start_time,
+                    end_time=end_time,
+                    app_id=self.app_id,
+                    sid=service_name
+                )
+                return transformed
 
         except Exception as e:
             print(f"   ✗ Error fetching ClickHouse data: {e}")

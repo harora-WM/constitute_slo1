@@ -1,0 +1,91 @@
+data_sources:
+  java_stats_api:
+    type: rest_api
+    description: "Real-time metrics and statistics from Java services"
+    capabilities:
+      - current_metrics
+      - service_health
+      - performance_data
+      - resource_usage
+    timeout: 30
+    retry_attempts: 3
+
+  postgres:
+    type: database
+    description: "SLO definitions, alerts, incidents, and change history"
+    capabilities:
+      - slo_definitions
+      - alert_history
+      - incident_tracking
+      - change_log
+      - configuration_history
+    pool_size: 10
+    connection_timeout: 10
+
+  clickhouse:
+    type: analytical_database
+    description: "Historical data, trends, patterns, and AI memory"
+    capabilities:
+      - trend_analysis
+      - pattern_detection
+      - historical_comparison
+      - ai_insights
+      - similarity_search
+      - incident_memory
+    pool_size: 5
+    compression: true
+
+  opensearch:
+    type: search_engine
+    description: "Logs, traces, and full-text search"
+    capabilities:
+      - log_search
+      - trace_analysis
+      - error_patterns
+      - audit_trail
+    index_patterns:
+      - logs-*
+      - traces-*
+      - audit-*
+    timeout: 60
+
+# Intent to data source mapping
+intent_data_sources:
+  STATE:
+    - java_stats_api
+    - postgres
+
+  TREND:
+    - java_stats_api
+    - clickhouse
+
+  PATTERN:
+    - clickhouse
+
+  CAUSE:
+    - java_stats_api
+    - opensearch
+    - postgres
+    - clickhouse
+
+  IMPACT:
+    - java_stats_api
+    - clickhouse
+
+  ACTION:
+    - clickhouse
+    - postgres
+
+  PREDICT:
+    - clickhouse
+    - java_stats_api
+
+  OPTIMIZE:
+    - java_stats_api
+    - opensearch
+    - postgres
+
+  EVIDENCE:
+    - opensearch
+    - postgres
+    - clickhouse

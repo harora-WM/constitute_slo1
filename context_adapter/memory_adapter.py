@@ -1,0 +1,281 @@
+"""
+Service Behavior Memory Adapter
+Fetches Service's behavioral patterns from ClickHouse for specific application and service within time range
+"""
+
+import json
+import requests
+from typing import Dict, List, Any, Optional
+from datetime import datetime
+
+
+# -------------------------------------------------------------------
+# Time helper
+# -------------------------------------------------------------------
+
+def ms_to_datetime_str(timestamp_ms: int) -> str:
+    """
+    Convert Unix timestamp in milliseconds to ClickHouse-compatible datetime string
+
+    Args:
+        timestamp_ms: Unix timestamp in milliseconds
+
+    Returns:
+        Datetime string in format 'YYYY-MM-DD HH:MM:SS'
+    """
+    dt = datetime.fromtimestamp(timestamp_ms / 1000)
+    return dt.strftime("%Y-%m-%d %H:%M:%S")
+
+
+# -------------------------------------------------------------------
+# ClickHouse fetch
+# -------------------------------------------------------------------
+
+def fetch_behavior_service_memory(
+    start_time: int,
+    end_time: int,
+    app_id: int,
+    sid: Optional[str] = None
+) -> List[Dict[str, Any]]:
+    """
+    Fetch behavior service memory records from ClickHouse for specific application and service
+
+    Args:
+        start_time: Start time in Unix milliseconds
+        end_time: End time in Unix milliseconds
+        app_id: Application ID
+        sid: Service name (optional - if None, fetches all services for the app)
+
+    Returns:
+        List of behavior memory records
+    """
+
+    clickhouse_url = "http://ec2-47-129-241-41.ap-southeast-1.compute.amazonaws.com:8123"
+    auth = ("wm_test", "Watermelon@123")
+
+    # Convert milliseconds to datetime strings
+    start_dt = ms_to_datetime_str(start_time)
+    end_dt = ms_to_datetime_str(end_time)
+
+    # Build WHERE clause based on whether service is specified
+    where_clause = f"""
+    WHERE application_id = {app_id}
+      AND detected_at >= toDateTime('{start_dt}')
+      AND detected_at <= toDateTime('{end_dt}')
+    """
+
+    if sid:
+        where_clause += f"\n      AND service = '{sid}'"
+
+    query = f"""
+    SELECT
+        application_id,
+        service,
+        metric,
+        baseline_state,
+        baseline_value,
+        pattern_type,
+        pattern_window,
+        delta_success,
+        delta_latency_p90,
+        support_days,
+        confidence,
+        long_term,
+        recency,
+        first_seen,
+        last_seen,
+        detected_at
+    FROM ai_service_behavior_memory
+    {where_clause}
+    ORDER BY detected_at DESC
+    FORMAT JSONEachRow
+    """
+
+    try:
+        response = requests.get(
+            clickhouse_url,
+            auth=auth,
+            params={
+                "query": query.strip(),
+                "database": "metrics"
+            },
+            timeout=30
+        )
+        response.raise_for_status()
+
+        rows = [
+            json.loads(line)
+            for line in response.text.strip().split("\n")
+            if line.strip()
+        ]
+
+        print(f"✓ Fetched {len(rows)} behavior records")
+        return rows
+
+    except requests.exceptions.Timeout as e:
+        print(f"✗ ClickHouse timeout after 30s: {e}")
+        raise
+    except requests.exceptions.ConnectionError as e:
+        print(f"✗ Cannot connect to ClickHouse: {e}")
+        raise
+    except requests.exceptions.HTTPError as e:
+        if e.response.status_code == 401:
+            print(f"✗ ClickHouse authentication failed - check credentials")
+        elif e.response.status_code == 400:
+            print(f"✗ Invalid SQL query: {e.response.text}")
+        else:
+            print(f"✗ ClickHouse HTTP error {e.response.status_code}: {e.response.text}")
+        raise
+    except json.JSONDecodeError as e:
+        print(f"✗ Failed to parse ClickHouse response as JSON: {e}")
+        raise
+    except Exception as e:
+        print(f"✗ Unexpected error: {type(e).__name__}: {e}")
+        raise
+
+
+# -------------------------------------------------------------------
+# Transform to LLM format
+# -------------------------------------------------------------------
+
+def transform_behavior_memory(
+    rows: List[Dict[str, Any]],
+    start_time: int,
+    end_time: int,
+    app_id: int,
+    sid: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Transform behavior memory records to LLM-ready format
+
+    Args:
+        rows: List of raw behavior memory records from ClickHouse
+        start_time: Start time in Unix milliseconds
+        end_time: End time in Unix milliseconds
+        app_id: Application ID
+        sid: Service name (optional)
+
+    Returns:
+        LLM-ready formatted dictionary
+    """
+
+    # Define required fields
+    REQUIRED_FIELDS = [
+        "application_id", "service", "metric", "baseline_state", "baseline_value",
+        "pattern_type", "pattern_window", "delta_success", "delta_latency_p90",
+        "support_days", "confidence", "first_seen", "last_seen", "detected_at"
+    ]
+
+    services = set()
+    patterns = []
+    skipped_records = 0
+
+    for i, r in enumerate(rows):
+        # Validate required fields exist
+        missing_fields = [field for field in REQUIRED_FIELDS if field not in r]
+
+        if missing_fields:
+            print(f"⚠ Warning: Record {i} missing fields {missing_fields}, skipping...")
+            skipped_records += 1
+            continue
+
+        try:
+            services.add(r["service"])
+
+            patterns.append({
+                "application_id": r["application_id"],
+                "service": r["service"],
+                "metric": r["metric"],
+                "baseline_state": r["baseline_state"],
+                "baseline_value": r["baseline_value"],
+                "pattern_type": r["pattern_type"],
+                "pattern_window": r["pattern_window"],
+                "delta": {
+                    "success": r["delta_success"],
+                    "latency_p90": r["delta_latency_p90"]
+                },
+                "support_days": r["support_days"],
+                "confidence": r["confidence"],
+                "weights": {
+                    "long_term": r.get("long_term"),
+                    "recency": r.get("recency")
+                },
+                "seen": {
+                    "first": r["first_seen"],
+                    "last": r["last_seen"]
+                },
+                "detected_at": r["detected_at"]
+            })
+
+        except (KeyError, TypeError, ValueError) as e:
+            print(f"⚠ Warning: Error processing record {i}: {e}, skipping...")
+            skipped_records += 1
+            continue
+
+    if skipped_records > 0:
+        print(f"⚠ Skipped {skipped_records} invalid records out of {len(rows)}")
+
+    stats = {
+        "total_records": len(patterns),
+        "services_affected": len(services),
+        "chronic": sum(1 for p in patterns if p["baseline_state"] == "CHRONIC"),
+        "at_risk": sum(1 for p in patterns if p["baseline_state"] == "AT_RISK"),
+        "healthy": sum(1 for p in patterns if p["baseline_state"] == "HEALTHY")
+    }
+
+    # Convert timestamps to readable format for display
+    start_dt = datetime.fromtimestamp(start_time / 1000).strftime("%Y-%m-%d %H:%M:%S")
+    end_dt = datetime.fromtimestamp(end_time / 1000).strftime("%Y-%m-%d %H:%M:%S")
+
+    return {
+        "data_source": "ai_service_behavior_memory",
+        "query": {
+            "application_id": app_id,
+            "service": sid if sid else "ALL",
+            "start_time": start_time,
+            "end_time": end_time,
+            "start_time_readable": start_dt,
+            "end_time_readable": end_dt
+        },
+        "stats": stats,
+        "patterns": patterns
+    }
+
+
+# -------------------------------------------------------------------
+# Main
+# -------------------------------------------------------------------
+
+if __name__ == "__main__":
+    # Example usage
+    # Time range: Last 30 days from now
+    from datetime import datetime, timedelta
+
+    now = datetime.now()
+    end_time = int(now.timestamp() * 1000)
+    start_time = int((now - timedelta(days=30)).timestamp() * 1000)
+
+    # Example parameters
+    APP_ID = 31854  # WMPlatform
+    SID = None  # None = fetch all services, or specify like "payment-api"
+
+    print("Fetching AI Service Behavior Memory")
+    print("=" * 50)
+    print(f"Application ID: {APP_ID}")
+    print(f"Service: {SID if SID else 'ALL'}")
+    print(f"Time Range: {datetime.fromtimestamp(start_time/1000)} to {datetime.fromtimestamp(end_time/1000)}")
+    print()
+
+    raw_rows = fetch_behavior_service_memory(start_time, end_time, APP_ID, SID)
+    llm_output = transform_behavior_memory(raw_rows, start_time, end_time, APP_ID, SID)
+
+    output_file = "ai_service_behavior_memory_output.json"
+    with open(output_file, "w") as f:
+        json.dump(llm_output, f, indent=2)
+
+    print(f"\n✓ Saved {output_file}")
+    print(f"Records           : {llm_output['stats']['total_records']}")
+    print(f"Services affected : {llm_output['stats']['services_affected']}")
+    print(f"Chronic           : {llm_output['stats']['chronic']}")
+    print(f"At Risk           : {llm_output['stats']['at_risk']}")
+    print(f"Healthy           : {llm_output['stats']['healthy']}")

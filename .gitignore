@@ -1,0 +1,33 @@
+# Environment variables and credentials
+.env
+*.env
+.env.*
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Output files
+*.json
+!requirements.txt
+!package.json
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log

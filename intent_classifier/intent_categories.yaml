@@ -1,0 +1,346 @@
+STATE:
+  description: "What is happening - Snapshot, awareness, reporting"
+  intents:
+    CURRENT_HEALTH:
+      description: "Overall application health status"
+      examples:
+        - "How is my application now?"
+        - "What's the current health of my app?"
+        - "Application status?"
+      data_sources:
+        - java_stats_api
+        - postgres
+
+    SERVICE_HEALTH:
+      description: "Individual service health check"
+      examples:
+        - "Is payment-api healthy?"
+        - "How is the checkout service doing?"
+        - "Status of user-service?"
+      data_sources:
+        - java_stats_api
+
+    SLO_STATUS:
+      description: "SLO breach and compliance status"
+      examples:
+        - "Which SLOs are breached?"
+        - "Are we meeting our SLOs?"
+        - "SLO compliance status?"
+      data_sources:
+        - postgres
+
+    ALERT_STATUS:
+      description: "Active alerts information"
+      examples:
+        - "What alerts are active?"
+        - "Show me current alerts"
+        - "Any active warnings?"
+      data_sources:
+        - postgres
+
+    INCIDENT_STATUS:
+      description: "Open incidents tracking"
+      examples:
+        - "What incidents are open?"
+        - "Show active incidents"
+        - "Current incident status?"
+      data_sources:
+        - postgres
+
+TREND:
+  description: "How things are changing - Drift, degradation, improvement"
+  intents:
+    UNDERCURRENTS_TREND:
+      description: "Recent drift and gradual changes"
+      examples:
+        - "What is drifting in last 1h?"
+        - "What's changing in the last 24h?"
+        - "Show me recent drift"
+      data_sources:
+        - java_stats_api
+        - clickhouse
+
+    HISTORICAL_COMPARISON:
+      description: "Compare different time periods"
+      examples:
+        - "Today vs last month"
+        - "This week compared to last week"
+        - "Month over month comparison"
+      data_sources:
+        - clickhouse
+
+    PRE_POST_CHANGE:
+      description: "Before and after deployment/change analysis"
+      examples:
+        - "Before vs after deployment"
+        - "Impact of last release"
+        - "Changes after rollout"
+      data_sources:
+        - java_stats_api
+        - clickhouse
+
+    SLO_BURN_TREND:
+      description: "Error budget consumption rate"
+      examples:
+        - "Are we burning error budget faster?"
+        - "Error budget burn rate"
+        - "SLO budget consumption trend"
+      data_sources:
+        - postgres
+        - clickhouse
+
+PATTERN:
+  description: "Recurring/seasonal behavior - Time-based intelligence"
+  intents:
+    SEASONALITY_PATTERN:
+      description: "Recurring patterns by day/week"
+      examples:
+        - "Every Thursday issues?"
+        - "Weekend performance patterns"
+        - "Weekly recurring problems"
+      data_sources:
+        - clickhouse
+
+    TIME_WINDOW_ANOMALY:
+      description: "Specific time-of-day issues"
+      examples:
+        - "Daily 4-5 pm problems?"
+        - "Morning peak issues"
+        - "Night time anomalies"
+      data_sources:
+        - clickhouse
+
+    RECURRING_INCIDENT:
+      description: "Similar historical incidents"
+      examples:
+        - "Have we seen this before?"
+        - "Similar past incidents"
+        - "Recurring failure pattern"
+      data_sources:
+        - clickhouse
+
+CAUSE:
+  description: "Why it happened - Root cause analysis"
+  intents:
+    ROOT_CAUSE_SINGLE:
+      description: "Root cause for single service failure"
+      examples:
+        - "Why is payment-api failing?"
+        - "What caused the checkout error?"
+        - "Root cause of login issues"
+      data_sources:
+        - java_stats_api
+        - opensearch
+        - clickhouse
+
+    ROOT_CAUSE_MULTI:
+      description: "Root cause for multiple service failures"
+      examples:
+        - "Why multiple services unhealthy?"
+        - "What's causing widespread failures?"
+        - "Common root cause analysis"
+      data_sources:
+        - java_stats_api
+        - opensearch
+        - clickhouse
+
+    ALERT_DEBUG:
+      description: "Why specific alert triggered"
+      examples:
+        - "Why did this alert fire?"
+        - "Alert trigger reason"
+        - "What caused this notification?"
+      data_sources:
+        - postgres
+        - opensearch
+
+    CONFIG_DRIFT_CAUSE:
+      description: "Configuration change impact analysis"
+      examples:
+        - "Did config change cause this?"
+        - "Impact of configuration update"
+        - "Config drift analysis"
+      data_sources:
+        - postgres
+        - clickhouse
+
+IMPACT:
+  description: "What else is affected - Blast radius & business impact"
+  intents:
+    BLAST_RADIUS:
+      description: "Cascading failure analysis"
+      examples:
+        - "What else breaks if this fails?"
+        - "Downstream impact analysis"
+        - "Dependency failure chain"
+      data_sources:
+        - java_stats_api
+        - clickhouse
+
+    USER_JOURNEY_IMPACT:
+      description: "User flow/journey disruption"
+      examples:
+        - "Impact on checkout flow?"
+        - "User journey affected"
+        - "Customer experience impact"
+      data_sources:
+        - java_stats_api
+        - clickhouse
+
+    GOLDEN_PATH_IMPACT:
+      description: "Critical business flow impact"
+      examples:
+        - "Business impact of SLO breach?"
+        - "Revenue impact analysis"
+        - "Critical path disruption"
+      data_sources:
+        - java_stats_api
+        - clickhouse
+
+    CUSTOMER_IMPACT:
+      description: "Customer-specific impact analysis"
+      examples:
+        - "Which customers are affected?"
+        - "Customer impact scope"
+        - "Affected user segments"
+      data_sources:
+        - java_stats_api
+        - clickhouse
+
+ACTION:
+  description: "What should I do - Decision support"
+  intents:
+    MITIGATION_STEPS:
+      description: "Immediate fix recommendations"
+      examples:
+        - "How do I fix this now?"
+        - "Quick mitigation steps"
+        - "Emergency resolution"
+      data_sources:
+        - clickhouse
+
+    RUNBOOK_GUIDANCE:
+      description: "Step-by-step runbook execution"
+      examples:
+        - "What steps should I follow?"
+        - "Show me the runbook"
+        - "Procedure for this issue"
+      data_sources:
+        - clickhouse
+
+    ROLLBACK_ADVICE:
+      description: "Rollback decision support"
+      examples:
+        - "Should I rollback this change?"
+        - "Is rollback necessary?"
+        - "Rollback recommendation"
+      data_sources:
+        - clickhouse
+        - postgres
+
+    PREVENTIVE_ACTION:
+      description: "Future prevention strategies"
+      examples:
+        - "How to avoid this again?"
+        - "Prevention strategies"
+        - "Long-term fix recommendations"
+      data_sources:
+        - clickhouse
+
+PREDICT:
+  description: "Future risk - Proactive operations"
+  intents:
+    RISK_PREDICTION:
+      description: "Predict potential failures"
+      examples:
+        - "What might fail next?"
+        - "Upcoming risk prediction"
+        - "Failure forecast"
+      data_sources:
+        - clickhouse
+        - java_stats_api
+
+    CHANGE_RISK:
+      description: "Deployment risk assessment"
+      examples:
+        - "Is this deployment risky?"
+        - "Release risk analysis"
+        - "Change impact prediction"
+      data_sources:
+        - clickhouse
+        - java_stats_api
+
+    CAPACITY_RISK:
+      description: "Capacity and scaling risk"
+      examples:
+        - "Will traffic spike cause issues?"
+        - "Capacity risk assessment"
+        - "Scaling requirements prediction"
+      data_sources:
+        - java_stats_api
+        - clickhouse
+
+OPTIMIZE:
+  description: "Performance/cost tuning - Optimization insights"
+  intents:
+    PERFORMANCE_BOTTLENECK:
+      description: "Performance bottleneck identification"
+      examples:
+        - "What is slowing us down?"
+        - "Performance bottlenecks"
+        - "Slow component analysis"
+      data_sources:
+        - java_stats_api
+        - opensearch
+
+    QUERY_OPTIMIZATION:
+      description: "Database query optimization"
+      examples:
+        - "Which queries are costly?"
+        - "Expensive query analysis"
+        - "Query performance issues"
+      data_sources:
+        - opensearch
+        - postgres
+
+    RESOURCE_WASTE:
+      description: "Resource over-provisioning detection"
+      examples:
+        - "Where are we over-provisioned?"
+        - "Wasted resources"
+        - "Cost optimization opportunities"
+      data_sources:
+        - java_stats_api
+
+EVIDENCE:
+  description: "Explainability & proof - Trust & audit"
+  intents:
+    EVIDENCE_SUMMARY:
+      description: "Supporting evidence for RCA"
+      examples:
+        - "Show evidence for RCA"
+        - "Proof of root cause"
+        - "Supporting data"
+      data_sources:
+        - opensearch
+        - clickhouse
+
+    INCIDENT_TIMELINE:
+      description: "Step-by-step incident reconstruction"
+      examples:
+        - "What happened step-by-step?"
+        - "Incident timeline"
+        - "Sequence of events"
+      data_sources:
+        - opensearch
+        - postgres
+
+    CHANGE_AUDIT:
+      description: "Change tracking and audit trail"
+      examples:
+        - "What changed and when?"
+        - "Change audit log"
+        - "Configuration change history"
+      data_sources:
+        - postgres
+        - opensearch
